@@ -1,2 +1,5 @@
 # Ignore sqlite database file
 docker_images.db
+
+# Python bytecode caches
+__pycache__/
