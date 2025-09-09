@@ -335,3 +335,69 @@ def show_unique_files(db: DockerImageDB, comparison_id: int, limit: int = 20):
     for i, (image_name, file_path, file_size) in enumerate(unique_files[:limit]):
         size_kb = file_size / 1024 if file_size else 0
         print(f"{image_name[:24]:<25} {size_kb:<12.2f} {file_path}")
+
+
+# ---- CLI entry point ----
+
+def _cmd_scan(db: DockerImageDB, args):
+    for image in args.images:
+        db.scan_image(image)
+
+def _cmd_compare(db: DockerImageDB, args):
+    comparison_id = db.compare_images(args.images, args.name)
+    print_comparison_summary(db, comparison_id)
+
+def _cmd_list_images(db: DockerImageDB, args):
+    list_images(db)
+
+def _cmd_list_comparisons(db: DockerImageDB, args):
+    list_comparisons(db)
+
+def _cmd_summary(db: DockerImageDB, args):
+    print_comparison_summary(db, args.id)
+
+def _cmd_unique(db: DockerImageDB, args):
+    show_unique_files(db, args.id, args.limit)
+
+
+def main():
+    """docker-diff command line interface"""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="docker-diff", description="Docker image file comparison and database manager")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_scan = sub.add_parser("scan", help="Scan one or more images and store file listings")
+    p_scan.add_argument("images", nargs="+", help="Docker image names (e.g., ubuntu:22.04)")
+    p_scan.set_defaults(func=_cmd_scan)
+
+    p_compare = sub.add_parser("compare", help="Compare images and store results")
+    p_compare.add_argument("images", nargs="+", help="Docker image names to compare")
+    p_compare.add_argument("--name", help="Optional comparison name")
+    p_compare.set_defaults(func=_cmd_compare)
+
+    p_list = sub.add_parser("list", help="List images or comparisons")
+    sub_list = p_list.add_subparsers(dest="what", required=True)
+
+    p_list_images = sub_list.add_parser("images", help="List scanned images")
+    p_list_images.set_defaults(func=_cmd_list_images)
+
+    p_list_comparisons = sub_list.add_parser("comparisons", help="List comparisons")
+    p_list_comparisons.set_defaults(func=_cmd_list_comparisons)
+
+    p_summary = sub.add_parser("summary", help="Show summary for a comparison")
+    p_summary.add_argument("id", type=int, help="Comparison ID")
+    p_summary.set_defaults(func=_cmd_summary)
+
+    p_unique = sub.add_parser("unique", help="Show files unique to each image in a comparison")
+    p_unique.add_argument("id", type=int, help="Comparison ID")
+    p_unique.add_argument("--limit", type=int, default=20, help="Max rows to display")
+    p_unique.set_defaults(func=_cmd_unique)
+
+    args = parser.parse_args()
+    db = DockerImageDB()
+    args.func(db, args)
+
+
+if __name__ == "__main__":
+    main()
