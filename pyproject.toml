@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docker-diff"
-version = "0.0.1"
+version = "0.0.2"
 description = "Docker Image Comparison Database Manager"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -19,6 +19,7 @@ Repository = "https://github.com/eapolinario/docker-diff"
 
 [tool.setuptools]
 py-modules = ["docker_diff"]
+package-data = {"docker_diff" = ["schema.sql"]}
 
 [dependency-groups]
 # uv dependency groups (e.g., `uv add --group dev pytest`)
