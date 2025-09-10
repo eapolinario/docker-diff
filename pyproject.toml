@@ -14,12 +14,14 @@ dependencies = []
 Repository = "https://github.com/eapolinario/docker-diff"
 
 [project.scripts]
-# Installs a `docker-diff` command that calls docker_diff:main
-"docker-diff" = "docker_diff:main"
+# Installs a `docker-diff` command that calls docker_diff_pkg.cli:main
+"docker-diff" = "docker_diff_pkg.cli:main"
 
 [tool.setuptools]
-py-modules = ["docker_diff"]
-package-data = {"docker_diff" = ["schema.sql"]}
+packages = ["docker_diff_pkg"]
+
+[tool.setuptools.package-data]
+docker_diff_pkg = ["schema.sql"]
 
 [dependency-groups]
 # uv dependency groups (e.g., `uv add --group dev pytest`)
