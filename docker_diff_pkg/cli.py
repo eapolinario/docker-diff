@@ -188,9 +188,34 @@ class DockerImageDB:
             file_data,
         )
     
-    def scan_image(self, image_name: str) -> int:
+    def scan_image(self, image_name: str, force: bool = False) -> int:
         """Scan a Docker image and store its files"""
         print(f"Scanning {image_name}...")
+
+        # Helper to parse tag safely: consider last ':' after last '/'
+        def _get_tag(name: str) -> str:
+            slash_idx = name.rfind('/')
+            colon_idx = name.rfind(':')
+            if colon_idx > slash_idx:
+                return name[colon_idx + 1 :]
+            return 'latest'
+
+        # If image already exists with files and tag is not 'latest', skip re-scan
+        tag = _get_tag(image_name).lower() if image_name else 'latest'
+        if not force and tag != 'latest':
+            rows = self._exec(
+                """
+                SELECT i.id, COUNT(f.id) as file_count
+                FROM images i
+                LEFT JOIN files f ON i.id = f.image_id
+                WHERE i.name = ?
+                GROUP BY i.id
+                """,
+                (image_name,),
+            ).rows
+            if rows and rows[0][1] and int(rows[0][1]) > 0:
+                print(f"  Skipping re-scan for {image_name} (already in DB with files)")
+                return int(rows[0][0])
         
         # Add image to database
         image_id = self.add_image(image_name)
@@ -247,7 +272,7 @@ class DockerImageDB:
                 (comparison_id, image_id),
             )
     
-    def compare_images(self, image_names: List[str], comparison_name: str = None) -> int:
+    def compare_images(self, image_names: List[str], comparison_name: str = None, *, force: bool = False) -> int:
         """Compare multiple images and store results"""
         if not comparison_name:
             comparison_name = f"Comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -255,7 +280,7 @@ class DockerImageDB:
         # Scan all images
         image_ids = []
         for image_name in image_names:
-            image_id = self.scan_image(image_name)
+            image_id = self.scan_image(image_name, force=force)
             image_ids.append(image_id)
         
         # Create comparison
@@ -473,10 +498,10 @@ def show_unique_files(db: DockerImageDB, comparison_id: int, limit: int = 20):
 
 def _cmd_scan(db: DockerImageDB, args):
     for image in args.images:
-        db.scan_image(image)
+        db.scan_image(image, force=args.force)
 
 def _cmd_compare(db: DockerImageDB, args):
-    comparison_id = db.compare_images(args.images, args.name)
+    comparison_id = db.compare_images(args.images, args.name, force=args.force)
     print_comparison_summary(db, comparison_id)
 
 def _cmd_list_images(db: DockerImageDB, args):
@@ -501,11 +526,13 @@ def main():
 
     p_scan = sub.add_parser("scan", help="Scan one or more images and store file listings")
     p_scan.add_argument("images", nargs="+", help="Docker image names (e.g., ubuntu:22.04)")
+    p_scan.add_argument("--force", action="store_true", help="Re-scan even if image exists in DB (overrides skip)")
     p_scan.set_defaults(func=_cmd_scan)
 
     p_compare = sub.add_parser("compare", help="Compare images and store results")
     p_compare.add_argument("images", nargs="+", help="Docker image names to compare")
     p_compare.add_argument("--name", help="Optional comparison name")
+    p_compare.add_argument("--force", action="store_true", help="Re-scan images even if they exist in DB")
     p_compare.set_defaults(func=_cmd_compare)
 
     p_list = sub.add_parser("list", help="List images or comparisons")
