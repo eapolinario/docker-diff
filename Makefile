@@ -1,4 +1,4 @@
-.PHONY: build clean check-uv integration-test check-gh release
+.PHONY: build clean check-uv integration-test check-gh release release-dry-run
 
 BUILD_DIR := build
 TEST_VENV := .venv-integration-test
@@ -34,12 +34,48 @@ check-gh:
 	@which gh > /dev/null 2>&1 || (echo "Error: gh (GitHub CLI) is not installed. Install https://cli.github.com/" && exit 1)
 	@gh auth status > /dev/null 2>&1 || (echo "Error: gh is not authenticated. Run: gh auth login" && exit 1)
 
-# Create a GitHub release and tag using gh. Usage: make release VERSION=0.0.3
-release: check-gh
-	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=0.0.3" && exit 1; fi
-	@# Ensure working tree is clean (no unstaged or staged changes)
-	@git diff --quiet || (echo "Error: Uncommitted changes present." && exit 1)
-	@git diff --cached --quiet || (echo "Error: Staged but uncommitted changes present." && exit 1)
-	@TAG="v$(VERSION)"; \
-		echo "Creating GitHub release $$TAG at $$(git rev-parse --short HEAD)"; \
-		gh release create "$$TAG" --title "$$TAG" --generate-notes --latest --target "$(shell git rev-parse HEAD)"
+# Create a GitHub release and tag using gh.
+# Usage:
+#   - Explicit version: make release VERSION=0.0.7
+#   - Bump by type:      make release BUMP=patch|minor|major  (default: patch)
+# Optional:
+#   - DRY_RUN=1 to only print computed version/tag without creating a release
+release:
+	@if [ "$(DRY_RUN)" != "1" ]; then $(MAKE) check-gh; fi
+	@# Ensure working tree is clean (skip in DRY_RUN)
+	@if [ "$(DRY_RUN)" != "1" ]; then git diff --quiet || (echo "Error: Uncommitted changes present." && exit 1); fi
+	@if [ "$(DRY_RUN)" != "1" ]; then git diff --cached --quiet || (echo "Error: Staged but uncommitted changes present." && exit 1); fi
+	@
+	@# Determine VERSION if not provided, using BUMP (defaults to patch)
+	@if [ -z "$(VERSION)" ]; then \
+		LAST_TAG=$$(gh release view --json tagName --jq '.tagName' --latest 2>/dev/null || true); \
+		if [ -z "$$LAST_TAG" ]; then LAST_TAG=$$(git tag -l 'v*' --sort=-v:refname | head -n1); fi; \
+		BASE_VER=$${LAST_TAG#v}; \
+		if [ -z "$$BASE_VER" ]; then BASE_VER=0.0.0; fi; \
+		MAJOR=$$(echo "$$BASE_VER" | awk -F. '{print $$1+0}'); \
+		MINOR=$$(echo "$$BASE_VER" | awk -F. '{print $$2+0}'); \
+		PATCH=$$(echo "$$BASE_VER" | awk -F. '{print $$3+0}'); \
+		BUMP_LOWER=$$(echo "$(BUMP)" | tr '[:upper:]' '[:lower:]'); \
+		if [ -z "$$BUMP_LOWER" ]; then BUMP_LOWER=patch; fi; \
+		case "$$BUMP_LOWER" in \
+		  major) MAJOR=$$((MAJOR+1)); MINOR=0; PATCH=0 ;; \
+		  minor) MINOR=$$((MINOR+1)); PATCH=0 ;; \
+		  patch) PATCH=$$((PATCH+1)) ;; \
+		  *) echo "Invalid BUMP: $(BUMP). Use patch|minor|major"; exit 1 ;; \
+		esac; \
+		VERSION=$${MAJOR}.$${MINOR}.$${PATCH}; \
+		echo "Computed next version from $${LAST_TAG:-none} with BUMP=$$BUMP_LOWER => $$VERSION"; \
+	fi; \
+	TAG=v$$VERSION; \
+	echo "Release tag: $$TAG"; \
+	echo "Commit: $$(git rev-parse --short HEAD)"; \
+	if [ "$(DRY_RUN)" = "1" ]; then \
+		echo "[DRY RUN] Would create GitHub release $$TAG"; \
+	else \
+		echo "Creating GitHub release $$TAG"; \
+		gh release create "$$TAG" --title "$$TAG" --generate-notes --latest --target "$(shell git rev-parse HEAD)"; \
+	fi
+
+# Dry run helper: computes the next version/tag without creating a release
+release-dry-run:
+	@$(MAKE) --no-print-directory release DRY_RUN=1 BUMP=$(BUMP) VERSION=$(VERSION)
