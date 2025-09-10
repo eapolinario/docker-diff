@@ -7,7 +7,10 @@ name = "docker-diff"
 description = "Docker Image Comparison Database Manager"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = [
+    # Turso (libsql) Python client for remote SQLite-compatible DBs
+    "libsql-client>=0.3",
+]
 dynamic = ["version"]
 
 [project.urls]
