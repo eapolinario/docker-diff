@@ -222,10 +222,101 @@ class DockerImageDB:
         
         # Get file listing using docker run
         try:
-            result = subprocess.run([
-                'docker', 'run', '--rm', image_name, 
-                'find', '/', '-type', 'f', '-exec', 'stat', '-c', '%n|%s|%Y', '{}', ';'
-            ], capture_output=True, text=True)
+            # Stream file listing using Docker SDK if available; fallback to streaming subprocess
+            # Clear existing files first (we'll insert incrementally)
+            self._exec("DELETE FROM files WHERE image_id = ?", (image_id,))
+
+            insert_sql = """
+                INSERT INTO files 
+                (image_id, file_path, file_size, file_mode, modified_time, file_type, checksum)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+
+            batch: List[Tuple[Any, ...]] = []
+            batch_size = 500
+            inserted = 0
+
+            def flush_batch():
+                nonlocal batch, inserted
+                if batch:
+                    self._executemany(insert_sql, batch)
+                    inserted += len(batch)
+                    batch = []
+
+            def parse_line(line: str):
+                parts = line.strip().split("|")
+                if len(parts) >= 3:
+                    path = parts[0]
+                    size = int(parts[1]) if parts[1].isdigit() else 0
+                    mtime = int(parts[2]) if parts[2].isdigit() else None
+                    batch.append((image_id, path, size, None, mtime, "file", None))
+                    if len(batch) >= batch_size:
+                        flush_batch()
+
+            cmd = ['find', '/', '-type', 'f', '-exec', 'stat', '-c', '%n|%s|%Y', '{}', ';']
+
+            try:
+                try:
+                    import docker  # type: ignore
+                    client = docker.from_env()
+                    # Ensure image is available; pull only if not present
+                    try:
+                        client.images.get(image_name)
+                    except Exception:
+                        client.images.pull(image_name)
+
+                    container = client.containers.create(image=image_name, command=cmd, detach=True)
+                    try:
+                        container.start()
+                        remainder = ""
+                        for chunk in container.logs(stream=True, stdout=True, stderr=False, follow=True):
+                            if not chunk:
+                                continue
+                            text = chunk.decode("utf-8", errors="ignore")
+                            remainder += text
+                            while True:
+                                nl = remainder.find("\n")
+                                if nl == -1:
+                                    break
+                                line = remainder[:nl]
+                                remainder = remainder[nl + 1 :]
+                                if line:
+                                    parse_line(line)
+                        if remainder.strip():
+                            parse_line(remainder.strip())
+                        flush_batch()
+                    finally:
+                        try:
+                            container.remove(force=True)
+                        except Exception:
+                            pass
+
+                    print(f"  Stored {inserted} files for {image_name}")
+                    return image_id
+
+                except Exception as docker_err:
+                    # Fallback to streaming via subprocess
+                    proc = subprocess.Popen(
+                        ['docker', 'run', '--rm', image_name, *cmd],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                    )
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        if line:
+                            parse_line(line)
+                    proc.wait()
+                    if proc.returncode != 0:
+                        err = (proc.stderr.read() if proc.stderr else "").strip()
+                        raise subprocess.SubprocessError(err or f"docker run exited with {proc.returncode}")
+                    flush_batch()
+                    print(f"  Stored {inserted} files for {image_name}")
+                    return image_id
+
+            except Exception as e:
+                raise subprocess.SubprocessError(str(e))
             
             files = []
             for line in result.stdout.strip().split('\n'):
