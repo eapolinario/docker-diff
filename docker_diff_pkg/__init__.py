@@ -4,5 +4,7 @@ Provides functions to store and query Docker image file comparison results in SQ
 """
 
 from .cli import DockerImageDB, main
-
-__version__ = "0.0.2"
+try:
+    from ._version import version as __version__
+except Exception:  # pragma: no cover - fallback for editable/no-scm
+    __version__ = "0.0.0"
