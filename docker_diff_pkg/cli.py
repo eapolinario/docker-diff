@@ -242,6 +242,8 @@ class DockerImageDB:
                     self._executemany(insert_sql, batch)
                     inserted += len(batch)
                     batch = []
+                    if inserted % 1000 == 0:
+                        print(f"  Discovered {inserted} files...", flush=True)
 
             def parse_line(line: str):
                 parts = line.strip().split("|")
@@ -317,21 +319,6 @@ class DockerImageDB:
 
             except Exception as e:
                 raise subprocess.SubprocessError(str(e))
-            
-            files = []
-            for line in result.stdout.strip().split('\n'):
-                if '|' in line:
-                    parts = line.split('|')
-                    if len(parts) >= 3:
-                        files.append({
-                            'path': parts[0],
-                            'size': int(parts[1]) if parts[1].isdigit() else 0,
-                            'mtime': int(parts[2]) if parts[2].isdigit() else None
-                        })
-            
-            self.add_files_for_image(image_id, files)
-            print(f"  Stored {len(files)} files for {image_name}")
-            return image_id
             
         except subprocess.SubprocessError as e:
             print(f"Error scanning {image_name}: {e}")
