@@ -3,6 +3,7 @@
 ## Build/Lint/Test Commands
 - **Build:** `make build` (uses uv build system)
 - **Clean:** `make clean` (removes dist/, build/, cache dirs)
+- **Integration Test:** `make integration-test` (builds wheel, tests in clean venv)
 - **Install:** `uv add --group dev <package>` (add dev dependencies)
 - **Run CLI:** `python -m docker_diff_pkg.cli <command>` or `docker-diff <command>` (after install)
 
