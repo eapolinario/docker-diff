@@ -7,6 +7,8 @@
 - **Install:** `uv add --group dev <package>` (add dev dependencies)
 - **Run CLI:** `python -m docker_diff_pkg.cli <command>` or `docker-diff <command>` (after install)
 
+Note: For Turso/libsql setup, environment variables, HTTPS vs libsql schemes, and troubleshooting, see `README.md`.
+
 ## Architecture & Structure
 - **Package:** `docker_diff_pkg/` - Python package for Docker image comparison
 - **Main module:** `docker_diff_pkg/cli.py` - CLI tool implementation
