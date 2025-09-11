@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 import os
+import threading
+import time
 
 try:
     # Optional: Turso/libsql client for remote DB (sync wrapper)
@@ -235,6 +237,7 @@ class DockerImageDB:
             batch: List[Tuple[Any, ...]] = []
             batch_size = 500
             inserted = 0
+            last_activity = time.time()
 
             def flush_batch():
                 nonlocal batch, inserted
@@ -242,16 +245,18 @@ class DockerImageDB:
                     self._executemany(insert_sql, batch)
                     inserted += len(batch)
                     batch = []
-                    if inserted % 1000 == 0:
+                    if inserted % 100 == 0:
                         print(f"  Discovered {inserted} files...", flush=True)
 
             def parse_line(line: str):
+                nonlocal last_activity
                 parts = line.strip().split("|")
                 if len(parts) >= 3:
                     path = parts[0]
                     size = int(parts[1]) if parts[1].isdigit() else 0
                     mtime = int(parts[2]) if parts[2].isdigit() else None
                     batch.append((image_id, path, size, None, mtime, "file", None))
+                    last_activity = time.time()
                     if len(batch) >= batch_size:
                         flush_batch()
 
@@ -267,14 +272,40 @@ class DockerImageDB:
                     except Exception:
                         client.images.pull(image_name)
 
-                    container = client.containers.create(image=image_name, command=cmd, detach=True)
+                    container = client.containers.create(image=image_name, command=cmd, detach=True, oom_kill_disable=True)
                     try:
                         container.start()
+                        # Watchdog to detect inactivity/hangs and stop stuck containers
+                        inactivity_timeout = 60  # seconds with no output considered stuck
+                        watchdog_stop = False
+
+                        def _watchdog():
+                            nonlocal watchdog_stop
+                            while not watchdog_stop:
+                                time.sleep(5)
+                                try:
+                                    container.reload()
+                                    status = getattr(container, "status", "")
+                                    if status not in ("created", "running"):
+                                        break
+                                    if time.time() - last_activity > inactivity_timeout:
+                                        try:
+                                            container.kill()
+                                        except Exception:
+                                            pass
+                                        break
+                                except Exception:
+                                    break
+
+                        wd_thread = threading.Thread(target=_watchdog, daemon=True)
+                        wd_thread.start()
                         remainder = ""
                         for chunk in container.logs(stream=True, stdout=True, stderr=False, follow=True):
                             if not chunk:
                                 continue
                             text = chunk.decode("utf-8", errors="ignore")
+                            # Any incoming chunk counts as activity
+                            last_activity = time.time()
                             remainder += text
                             while True:
                                 nl = remainder.find("\n")
@@ -289,6 +320,11 @@ class DockerImageDB:
                         flush_batch()
                     finally:
                         try:
+                            watchdog_stop = True
+                            try:
+                                wd_thread.join(timeout=1)
+                            except Exception:
+                                pass
                             container.remove(force=True)
                         except Exception:
                             pass
@@ -306,12 +342,42 @@ class DockerImageDB:
                         bufsize=1,
                     )
                     assert proc.stdout is not None
+                    # Drain stderr concurrently to avoid deadlocks when it fills
+                    stderr_lines: List[str] = []
+
+                    def _drain_stderr(stream):
+                        nonlocal last_activity
+                        try:
+                            for eline in stream:  # type: ignore[assignment]
+                                stderr_lines.append(eline)
+                                last_activity = time.time()
+                        except Exception:
+                            pass
+
+                    t_err = None
+                    if proc.stderr is not None:
+                        t_err = threading.Thread(target=_drain_stderr, args=(proc.stderr,), daemon=True)
+                        t_err.start()
                     for line in proc.stdout:
                         if line:
                             parse_line(line)
-                    proc.wait()
+                    # After stdout is consumed, wait with a timeout to avoid hangs
+                    try:
+                        proc.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        raise subprocess.SubprocessError("docker run did not exit in time; killed to prevent hang")
+                    finally:
+                        try:
+                            if t_err is not None:
+                                t_err.join(timeout=2)
+                        except Exception:
+                            pass
                     if proc.returncode != 0:
-                        err = (proc.stderr.read() if proc.stderr else "").strip()
+                        err = "".join(stderr_lines[-50:]).strip()
                         raise subprocess.SubprocessError(err or f"docker run exited with {proc.returncode}")
                     flush_batch()
                     print(f"  Stored {inserted} files for {image_name}")
